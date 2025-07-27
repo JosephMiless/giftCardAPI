@@ -1,0 +1,84 @@
+import { config } from "../config/env.js";
+import { aToken, rToken } from "../tokens/jwt.js";
+import { comaparePassword, hashPassword } from "../utils/bcrypt.js";
+import { generateAlphanumericId } from "../utils/id.js";
+import { loginUserSchema, registerUserSchema } from "../validators/users.js";
+import { findUserByEmail, registerUser } from "./users.services.js";
+
+
+export const registerUserController = async (req, res) => {
+    try {
+
+       const {error, value} = registerUserSchema.validate(req.body);
+
+       if(error) return res.status(400).json({Error: error.message});
+
+       const {email, password} = value;
+
+       const user = await findUserByEmail(email);
+
+       if (user.rows.length > 0) return res.status(400).json({Error: "User exists already."});
+
+       const hashedPassword = await hashPassword(password);
+
+       const ID = await generateAlphanumericId("users", "id");
+
+       await registerUser(ID, email, hashedPassword);      
+
+        return res.status(201).json({
+            Message: "Account created successfully!"
+        });
+        
+    } catch (error) {
+
+        console.error("Error registering user", error);
+
+        return res.status(500).json({error: "Internal server error; registering user."})
+        
+    }
+};
+
+export const loginUserController = async (req, res) => {
+    try {
+        
+        const { error, value } = loginUserSchema.validate(req.body);
+
+        if (error) {
+            return res.status(400).json({ Error: error.message });
+        }
+        const { email, password } = value;
+        const user = await findUserByEmail(email);
+
+        if (user.rows.length === 0) return res.status(404).json({Error: "Invalid credentials."});
+
+        const isMatch = await comaparePassword(password, user.rows[0].password);
+
+        if(!isMatch) return res.status(401).json({Error: "Invalid credentials."});
+
+        const userId = user.rows[0].userid;
+        const userName = user.rows[0].name;
+        const userRole = user.rows[0].role;
+
+        const accessToken = aToken({ id: userId, name: userName, role: userRole });
+        const refreshToken = rToken({ id: userId, name: userName, role: userRole });
+
+        const cookieOptions = {
+            httpOnly: true,
+            secure: config.nodeEnv === "production",
+            sameSite: config.nodeEnv === "production" ? "None" : "Lax",
+            path: "/",
+            maxAge: 6 * 30 * 24 * 60 * 60 * 1000
+        };
+        
+        res.cookie("userRefreshToken", refreshToken, cookieOptions);        
+
+        return res.status(user.rows.length === 0 ? 201 : 200).json({
+            Message: "User logged in successfully!",
+            accessToken
+        });
+
+    } catch (error) {
+        console.log("Error logging in:", error);
+        return res.status(500).json({ Error: "Internal Server Error" });
+    }
+};
